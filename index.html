@@ -1,0 +1,2276 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>BloomBudget — your money, kindly</title>
+  <meta name="description" content="A warm, ADHD-friendly budget tracker. Track everything, judge nothing." />
+  <meta name="theme-color" content="#1A1118" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BloomBudget" />
+  <meta property="og:title" content="BloomBudget — your money, kindly" />
+  <meta property="og:description" content="A warm, ADHD-friendly budget tracker. Track everything, judge nothing." />
+  <meta property="og:type" content="website" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <style>
+    html, body { height: 100%; margin: 0; padding: 0; background: #1A1118; }
+    #root { height: 100%; }
+    * { -webkit-tap-highlight-color: transparent; }
+    #loading {
+      position: fixed; inset: 0; background: #1A1118;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-family: sans-serif; color: #E8809A; gap: 16px; z-index: 9999;
+    }
+    .spinner {
+      width: 40px; height: 40px; border-radius: 50%;
+      border: 3px solid #3E2838; border-top-color: #E8809A;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { font-size: 15px; color: #C8A8B4; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Loading BloomBudget...</p>
+  </div>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+
+  <script>
+    // Load Babel then compile and run the app
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js';
+    s.onload = function() {
+      try {
+        const code = document.getElementById('app-source').textContent;
+        const compiled = Babel.transform(code, {
+          presets: ['react'],
+          plugins: []
+        }).code;
+        const { useState, useEffect, useMemo } = React;
+        eval(compiled);
+        document.getElementById('loading').style.display = 'none';
+      } catch(e) {
+        document.getElementById('loading').innerHTML = '<p style="color:#E8809A;padding:20px;text-align:center">Failed to load: ' + e.message + '</p>';
+      }
+    };
+    s.onerror = function() {
+      document.getElementById('loading').innerHTML = '<p style="color:#E8809A;padding:20px;text-align:center">Could not load app. Please check your connection and refresh.</p>';
+    };
+    document.head.appendChild(s);
+  </script>
+
+  <script type="text/plain" id="app-source">
+
+// ─── Persistent Storage Helpers ───────────────────────────────────────────────
+const STORAGE_KEY = "bloom_budget_v1";
+const TUTORIAL_KEY = "bloom_tutorial_seen_v1";
+const ADMIN_KEY = "bloom_admin_config_v1";
+
+const getAdminConfig = () => {
+  try {
+    const r = localStorage.getItem(ADMIN_KEY);
+    if (r) return JSON.parse(r);
+  } catch(e) {}
+  return { kofiUrl: "https://ko-fi.com/YOUR_KOFI_USERNAME", feedbackEmail: "YOUR_EMAIL@example.com" };
+};
+
+const saveAdminConfig = (cfg) => {
+  try { localStorage.setItem(ADMIN_KEY, JSON.stringify(cfg)); } catch(e) {}
+};
+const hasTutorialBeenSeen = () => { try { return !!localStorage.getItem(TUTORIAL_KEY); } catch(e) { return false; } };
+const markTutorialSeen = () => { try { localStorage.setItem(TUTORIAL_KEY, "1"); } catch(e) {} };
+
+const saveData = async (data) => {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch(e) {} 
+};
+
+const loadData = async () => {
+  try { const r = localStorage.getItem(STORAGE_KEY); if (r) { const p = JSON.parse(r); if (p && Array.isArray(p.expenses)) return p; } } catch(e) {}
+  return null;
+};
+
+const clearStorage = async () => { try { localStorage.removeItem(STORAGE_KEY); } catch(e) {} };
+
+// ─── Default Data ─────────────────────────────────────────────────────────────
+const DEFAULT_CATEGORIES = [
+  { id: "c1", name: "Food & Groceries", color: "#E8936A", icon: "🛒" },
+  { id: "c2", name: "Pet Food", color: "#A8C5A0", icon: "🐾" },
+  { id: "c3", name: "Transport", color: "#7BA7BC", icon: "🚌" },
+  { id: "c4", name: "Subscriptions", color: "#C4A0C8", icon: "📱" },
+  { id: "c5", name: "Health", color: "#E88F8F", icon: "💊" },
+  { id: "c6", name: "Entertainment", color: "#F0C87A", icon: "🎵" },
+  { id: "c7", name: "Home", color: "#B8A89A", icon: "🏠" },
+  { id: "c8", name: "Clothing", color: "#D4A0B0", icon: "👗" },
+  { id: "c9", name: "Other", color: "#9CA8B0", icon: "✨" },
+];
+
+const DEFAULT_ACCOUNTS = [
+  { id: "a1", name: "Main account", color: "#E8936A", icon: "🏦" },
+  { id: "a2", name: "PayPal", color: "#7BA7BC", icon: "💙" },
+  { id: "a3", name: "Cash", color: "#A8C5A0", icon: "💶" },
+];
+
+const DEFAULT_BUDGETS = [
+  { id: "b1", categoryId: "c1", amount: 300, period: "monthly" },
+  { id: "b2", categoryId: "c2", amount: 150, period: "monthly" },
+];
+
+const INITIAL_STATE = {
+  expenses: [
+    {
+      id: "e1", name: "Pet food subscription", categoryId: "c2", accountId: "a1",
+      amount: 45, currency: "€", type: "Lastschrift", date: "2025-03-25",
+      recurring: true, recurringDay: 25, recurringPeriod: "monthly",
+      tags: ["Pets"], note: "Check stock before ordering"
+    },
+    {
+      id: "e2", name: "Spotify", categoryId: "c4", accountId: "a1",
+      amount: 10.99, currency: "€", type: "Lastschrift", date: "2025-03-01",
+      recurring: true, recurringDay: 1, recurringPeriod: "monthly",
+      tags: [], note: ""
+    },
+    {
+      id: "e3", name: "Weekly groceries", categoryId: "c1", accountId: "a3",
+      amount: 62.40, currency: "€", type: "Bar", date: "2025-03-20",
+      recurring: false, recurringDay: null, recurringPeriod: null,
+      tags: [], note: ""
+    },
+  ],
+  categories: DEFAULT_CATEGORIES,
+  accounts: DEFAULT_ACCOUNTS,
+  budgets: DEFAULT_BUDGETS,
+  notes: [
+    { id: "n1", text: "Check your upcoming recurring payments at the start of the month", date: "2025-03-25", pinned: true },
+  ],
+  currency: "€",
+};
+
+// ─── Utils ────────────────────────────────────────────────────────────────────
+const uid = () => Math.random().toString(36).slice(2, 9);
+const fmt = (n) => new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+const currentMonth = () => new Date().toISOString().slice(0, 7);
+const monthLabel = (ym) => { const [y, m] = ym.split("-"); return new Date(y, m - 1).toLocaleString("default", { month: "long", year: "numeric" }); };
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+const Icon = ({ name, size = 18 }) => {
+  const icons = {
+    home: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
+    plus: "M12 4v16m8-8H4",
+    chart: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+    calendar: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+    settings: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+    brain: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z",
+    tag: "M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z",
+    note: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+    trash: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
+    edit: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+    x: "M6 18L18 6M6 6l12 12",
+    check: "M5 13l4 4L19 7",
+    chevronDown: "M19 9l-7 7-7-7",
+    repeat: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
+    wallet: "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z",
+    sparkle: "M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z",
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {(icons[name] || "").split(" M").map((d, i) => <path key={i} d={i === 0 ? d : "M" + d} />)}
+    </svg>
+  );
+};
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const styles = `
+  @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #1A1118;
+    --surface: #261820;
+    --surface2: #2E1E28;
+    --border: #3E2838;
+    --text: #F5EEF0;
+    --text2: #C8A8B4;
+    --text3: #8A6878;
+    --berry: #E8809A;
+    --berry-light: #3D1E2C;
+    --berry-mid: #C4607A;
+    --sage: #7EC8A0;
+    --sage-light: #1A3028;
+    --warm: #F0A878;
+    --warm-light: #38200E;
+    --gold: #E8C070;
+    --gold-light: #302008;
+    --radius: 16px;
+    --radius-sm: 10px;
+    --shadow: 0 2px 20px rgba(0,0,0,0.40);
+    --shadow-lg: 0 8px 40px rgba(0,0,0,0.55);
+  }
+
+  body { background: var(--bg); font-family: 'Nunito', sans-serif; color: var(--text); }
+
+  .app { display: flex; height: 100vh; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 220px; min-width: 220px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    padding: 24px 16px; gap: 4px; overflow-y: auto;
+    background: linear-gradient(180deg, #2E1C28 0%, #1A1118 100%);
+  }
+  .sidebar-logo { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 22px; color: var(--berry); margin-bottom: 24px; padding: 0 8px; }
+  .sidebar-logo span { color: var(--text3); font-size: 13px; font-family: 'Nunito'; font-weight: 300; display: block; margin-top: 2px; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 10px; padding: 11px 10px;
+    border-radius: var(--radius-sm); border: none; background: none; cursor: pointer;
+    font-family: 'Nunito'; font-size: 14px; color: var(--text2); text-align: left;
+    transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1); width: 100%;
+    transform-origin: left center;
+  }
+  .nav-btn:hover { background: var(--surface2); color: var(--text); }
+  .nav-btn.active { font-weight: 700; transform: scale(1.04); background: rgba(255,255,255,0.06); }
+  .nav-btn.active { font-weight: 700; transform: scale(1.04); }
+  .nav-icon-pill {
+    width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center;
+    justify-content: center; flex-shrink: 0; transition: all 0.18s;
+  }
+  .nav-section { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; padding: 16px 12px 4px; }
+
+  /* Main */
+  .main { flex: 1; overflow-y: auto; background: var(--bg); background-image: radial-gradient(ellipse at 15% 0%, #2E1020 0%, transparent 55%), radial-gradient(ellipse at 85% 100%, #0E2820 0%, transparent 55%); }
+  .page { padding: 32px; max-width: 960px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+  .page-title { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 28px; color: var(--text); }
+  .page-subtitle { font-size: 14px; color: var(--text3); margin-top: 2px; }
+
+  /* Cards */
+  .card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 20px; }
+  .card-sm { background: var(--surface); border-radius: var(--radius-sm); border: 1px solid var(--border); padding: 16px; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 100px; border: none; cursor: pointer; font-family: 'Nunito'; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+  .btn-primary { background: var(--berry); color: white; }
+  .btn-primary:hover { background: #B55A6A; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(196,105,122,0.3); }
+  .btn-secondary { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-ghost { background: none; color: var(--text2); }
+  .btn-ghost:hover { background: var(--surface2); }
+  .btn-danger { background: #FDE8E8; color: #C45A5A; }
+  .btn-danger:hover { background: #F8D0D0; }
+  .btn-sm { padding: 6px 12px; font-size: 12px; }
+  .btn-icon { padding: 7px; border-radius: 8px; background: none; border: none; cursor: pointer; color: var(--text3); transition: all 0.15s; display: inline-flex; }
+  .btn-icon:hover { background: var(--surface2); color: var(--text); }
+
+  /* Stat cards */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .stat-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px 20px; }
+  .stat-label { font-size: 12px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat-value { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 26px; color: var(--text); margin: 4px 0 2px; }
+  .stat-sub { font-size: 12px; color: var(--text3); }
+  .stat-card.berry { border-left: 3px solid var(--berry); }
+  .stat-card.sage { border-left: 3px solid var(--sage); }
+  .stat-card.warm { border-left: 3px solid var(--warm); }
+  .stat-card.gold { border-left: 3px solid var(--gold); }
+
+  /* Expense list */
+  .expense-item {
+    display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+    border-radius: var(--radius-sm); background: var(--surface);
+    border: 1px solid var(--border); margin-bottom: 8px; transition: all 0.15s;
+  }
+  .expense-item:hover { border-color: var(--berry-mid); box-shadow: var(--shadow); }
+  .expense-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .expense-name { font-size: 14px; font-weight: 500; color: var(--text); }
+  .expense-meta { font-size: 12px; color: var(--text3); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .expense-amount { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 17px; color: var(--text); margin-left: auto; white-space: nowrap; }
+  .expense-amount.recurring { color: var(--berry); }
+  .tag-chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 100px; background: var(--gold-light); color: var(--gold); font-size: 11px; font-weight: 500; }
+  .tag-chip.sage { background: var(--sage-light); color: var(--sage); }
+  .type-chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 100px; background: var(--border); color: var(--text2); font-size: 11px; }
+
+  /* Form */
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .field label { font-size: 12px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; }
+  .field input, .field select, .field textarea {
+    padding: 10px 13px; border-radius: var(--radius-sm); border: 1.5px solid var(--border);
+    background: var(--surface2); font-family: 'Nunito'; font-size: 14px; color: var(--text);
+    transition: all 0.15s; outline: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--berry-mid); box-shadow: 0 0 0 3px var(--berry-light); }
+  .field textarea { resize: vertical; min-height: 70px; }
+  .field-hint { font-size: 11px; color: var(--text3); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(58,46,38,0.35); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; backdrop-filter: blur(2px); }
+  .modal { background: var(--surface); border-radius: 20px; padding: 28px; max-width: 520px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-lg); border: 1px solid var(--border); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  .modal-title { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 20px; }
+
+  /* Budget bar */
+  .budget-bar-wrap { margin: 8px 0 4px; }
+  .budget-bar-bg { height: 8px; border-radius: 100px; background: var(--border); overflow: hidden; }
+  .budget-bar-fill { height: 100%; border-radius: 100px; transition: width 0.6s ease; }
+
+  /* Calendar */
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .cal-header-cell { text-align: center; font-size: 11px; color: var(--text3); padding: 6px 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .cal-day {
+    height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-radius: 8px; font-size: 13px; cursor: default; gap: 2px; min-width: 0;
+  }
+  .cal-day.today { background: var(--berry-light); color: var(--berry); font-weight: 600; }
+  .cal-day.has-event { background: var(--warm-light); }
+  .cal-day-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--warm); flex-shrink: 0; }
+  .cal-day.empty { opacity: 0; pointer-events: none; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; padding: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); width: fit-content; margin-bottom: 20px; }
+  .tab { padding: 7px 16px; border-radius: 8px; border: none; background: none; font-family: 'Nunito'; font-size: 13px; cursor: pointer; color: var(--text3); transition: all 0.15s; }
+  .tab.active { background: var(--surface2); color: var(--text); box-shadow: 0 1px 6px rgba(0,0,0,0.3); font-weight: 600; }
+
+  /* Analysis */
+  .analysis-card { background: linear-gradient(135deg, #3A1020 0%, #261820 100%); border: 1px solid var(--berry-mid); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+  .analysis-title { font-family: 'Nunito', sans-serif; font-weight: 600; font-size: 16px; color: var(--berry); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .insight-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--berry-light); }
+  .insight-item:last-child { border-bottom: none; }
+  .insight-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+  .insight-text { font-size: 13px; color: var(--text2); line-height: 1.5; }
+  .insight-text strong { color: var(--text); }
+
+  /* Color picker row */
+  .color-swatch { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: all 0.15s; flex-shrink: 0; }
+  .color-swatch.selected { border-color: var(--text); transform: scale(1.15); }
+  .color-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Notes */
+  .note-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: flex-start; gap: 10px; }
+  .note-card.pinned { border-left: 3px solid var(--gold); background: #28180A; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 100px; }
+
+  /* Force dark theme on all inline pill inputs and selects */
+  input[type="month"], input[type="date"] {
+    background: var(--surface2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+    color-scheme: dark;
+  }
+  input[type="text"], input[type="number"], input[type="search"] {
+    background: var(--surface2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+  select {
+    background: var(--surface2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+  input::placeholder { color: var(--text3) !important; }
+
+  /* Mobile: bottom tab bar */
+  @media (max-width: 680px) {
+    .sidebar { display: none; }
+    .main { padding-bottom: 80px; }
+    .form-row, .form-row-3 { grid-template-columns: 1fr; }
+    .page { padding: 16px; }
+  }
+  @media (min-width: 681px) {
+    .bottom-nav { display: none; }
+  }
+
+  /* Bottom nav bar */
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+    background: rgba(28, 14, 22, 0.95); border-top: 1px solid var(--border);
+    display: flex; align-items: stretch;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    gap: 2px; backdrop-filter: blur(16px);
+  }
+  .bottom-nav-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; padding: 6px 2px; border: none; background: none; cursor: pointer;
+    border-radius: 10px; transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
+    min-height: 54px;
+  }
+  .bottom-nav-btn.active { transform: translateY(-3px) scale(1.08); }
+  .bottom-nav-pill {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.18s; flex-shrink: 0;
+  }
+  .bottom-nav-label {
+    font-size: 10px; font-family: 'Nunito'; font-weight: 600;
+    letter-spacing: 0.01em; line-height: 1;
+  }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 40px 20px; color: var(--text3); }
+  .empty-icon { font-size: 40px; margin-bottom: 10px; }
+  .empty-text { font-size: 14px; }
+
+  /* Recurring badge */
+  .rec-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 100px; background: var(--berry-light); color: var(--berry); font-size: 10px; font-weight: 600; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media(max-width:700px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  select option { background: #2A2440; color: #F0EBF8; }
+  .section-divider { height: 1px; background: var(--border); margin: 20px 0; }
+  .pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 100px; font-size: 12px; font-weight: 500; }
+`;
+
+// ─── Color palette ────────────────────────────────────────────────────────────
+const COLORS = ["#C4697A","#E8936A","#D4A060","#A8C5A0","#7A9E87","#7BA7BC","#8A8AC0","#C4A0C8","#E88F8F","#9CA8B0","#B8A89A","#D4A0B0"];
+
+// ─── Modals ───────────────────────────────────────────────────────────────────
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button className="btn-icon" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Expense Form ─────────────────────────────────────────────────────────────
+function ExpenseForm({ categories, accounts, onSave, onClose, initial }) {
+  const [form, setForm] = useState(initial || {
+    name: "", categoryId: categories[0]?.id || "", accountId: accounts[0]?.id || "",
+    amount: "", currency: "€", type: "Lastschrift", date: new Date().toISOString().slice(0, 10),
+    recurring: false, recurringDay: "", recurringPeriod: "monthly", tags: [], note: ""
+  });
+  const [tagInput, setTagInput] = useState("");
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const addTag = () => { if (tagInput.trim() && !form.tags.includes(tagInput.trim())) { set("tags", [...form.tags, tagInput.trim()]); setTagInput(""); } };
+  const removeTag = (t) => set("tags", form.tags.filter(x => x !== t));
+
+  return (
+    <div>
+      <div className="form-row">
+        <div className="field" style={{ gridColumn: "1/-1" }}>
+          <label>Name</label>
+          <input value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Monthly gym membership" />
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label>Amount</label>
+          <input type="number" step="0.01" value={form.amount} onChange={e => set("amount", e.target.value)} placeholder="0.00" />
+        </div>
+        <div className="field">
+          <label>Account</label>
+          <select value={form.accountId} onChange={e => set("accountId", e.target.value)}>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label>Category</label>
+          <select value={form.categoryId} onChange={e => set("categoryId", e.target.value)}>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>Type</label>
+          <select value={form.type} onChange={e => set("type", e.target.value)}>
+            {["Lastschrift","Überweisung","Bar","Karte","PayPal","Sonstige"].map(t => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label>Date</label>
+          <input type="date" value={form.date} onChange={e => set("date", e.target.value)} />
+        </div>
+        <div className="field">
+          <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <input type="checkbox" checked={form.recurring} onChange={e => set("recurring", e.target.checked)} />
+            Recurring payment
+          </label>
+          {form.recurring && (
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input type="number" placeholder="Day (1-31)" min="1" max="31" value={form.recurringDay} onChange={e => set("recurringDay", e.target.value)} style={{ width: "100px", padding: "8px 10px", borderRadius: "8px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px" }} />
+              <select value={form.recurringPeriod} onChange={e => set("recurringPeriod", e.target.value)} style={{ flex: 1, padding: "8px 10px", borderRadius: "8px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px" }}>
+                <option value="monthly">Monthly</option>
+                <option value="weekly">Weekly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="field">
+        <label>Tags</label>
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "6px" }}>
+          {form.tags.map(t => (
+            <span key={t} className="tag-chip" style={{ cursor: "pointer" }} onClick={() => removeTag(t)}>{t} ×</span>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: "6px" }}>
+          <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addTag()} placeholder="Add tag (Enter to confirm)" style={{ flex: 1, padding: "8px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px" }} />
+          <button className="btn btn-secondary btn-sm" onClick={addTag}>Add</button>
+        </div>
+        <div className="field-hint">Tags let you group expenses across categories (e.g. "Pets" for all pet-related costs)</div>
+      </div>
+      <div className="field">
+        <label>Note</label>
+        <textarea value={form.note} onChange={e => set("note", e.target.value)} placeholder="Add a reminder or note..." />
+      </div>
+      <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "4px" }}>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => onSave({ ...form, amount: parseFloat(form.amount) || 0, id: form.id || uid() })}>
+          {initial ? "Save Changes" : "Add Expense"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard ─────────────────────────────────────────────────────────────────
+function Dashboard({ data, setData }) {
+  const now = new Date();
+  const ym = currentMonth();
+
+  const monthExpenses = data.expenses.filter(e => e.date?.startsWith(ym));
+  const totalMonth = monthExpenses.reduce((s, e) => s + e.amount, 0);
+  const recurringTotal = data.expenses.filter(e => e.recurring).reduce((s, e) => s + e.amount, 0);
+  const allTags = [...new Set(data.expenses.flatMap(e => e.tags))];
+
+  const catSpend = {};
+  monthExpenses.forEach(e => { catSpend[e.categoryId] = (catSpend[e.categoryId] || 0) + e.amount; });
+  const topCat = Object.entries(catSpend).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const recentExpenses = [...data.expenses].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
+
+  const getCat = id => data.categories.find(c => c.id === id);
+  const getAcc = id => data.accounts.find(a => a.id === id);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Good day</div>
+          <div className="page-subtitle">{now.toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card berry">
+          <div className="stat-label">This month</div>
+          <div className="stat-value">{data.currency}{fmt(totalMonth)}</div>
+          <div className="stat-sub">{monthExpenses.length} transactions</div>
+        </div>
+        <div className="stat-card sage">
+          <div className="stat-label">Monthly recurring</div>
+          <div className="stat-value">{data.currency}{fmt(recurringTotal)}</div>
+          <div className="stat-sub">{data.expenses.filter(e => e.recurring).length} subscriptions</div>
+        </div>
+        <div className="stat-card warm">
+          <div className="stat-label">Tracked tags</div>
+          <div className="stat-value">{allTags.length}</div>
+          <div className="stat-sub">{allTags.slice(0, 2).join(", ") || "None yet"}</div>
+        </div>
+        <div className="stat-card gold">
+          <div className="stat-label">Accounts</div>
+          <div className="stat-value">{data.accounts.length}</div>
+          <div className="stat-sub">{data.accounts.map(a => a.name).join(", ")}</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div style={{ fontFamily: "Nunito", fontSize: "16px", marginBottom: "14px", color: "var(--text)" }}>Top categories this month</div>
+          {topCat.length === 0 ? <div className="empty"><div className="empty-text">No expenses this month yet</div></div> : topCat.map(([catId, amt]) => {
+            const cat = getCat(catId);
+            const pct = Math.min(100, (amt / totalMonth) * 100);
+            return (
+              <div key={catId} style={{ marginBottom: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: cat?.color, display: "inline-block" }} />
+                    {cat?.icon} {cat?.name}
+                  </span>
+                  <span style={{ fontFamily: "Nunito", fontWeight: 500 }}>{data.currency}{fmt(amt)}</span>
+                </div>
+                <div className="budget-bar-bg">
+                  <div className="budget-bar-fill" style={{ width: pct + "%", background: cat?.color }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="card">
+          <div style={{ fontFamily: "Nunito", fontSize: "16px", marginBottom: "14px" }}>Recent transactions</div>
+          {recentExpenses.length === 0 ? (
+            <div className="empty"><div className="empty-text">No expenses yet</div></div>
+          ) : recentExpenses.map(e => {
+            const cat = getCat(e.categoryId);
+            return (
+              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <div className="expense-dot" style={{ background: cat?.color }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "13px", fontWeight: 500 }}>{e.name}</div>
+                  <div style={{ fontSize: "11px", color: "var(--text3)" }}>{cat?.name} · {e.date}</div>
+                </div>
+                <div style={{ fontFamily: "Nunito", fontSize: "15px" }}>{data.currency}{fmt(e.amount)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Budget summary */}
+      {data.budgets.length > 0 && (
+        <div className="card" style={{ marginTop: "16px" }}>
+          <div style={{ fontFamily: "Nunito", fontSize: "16px", marginBottom: "14px" }}>Budget snapshot</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "14px" }}>
+            {data.budgets.map(b => {
+              const cat = getCat(b.categoryId);
+              const spent = monthExpenses.filter(e => e.categoryId === b.categoryId).reduce((s, e) => s + e.amount, 0);
+              const pct = Math.min(100, (spent / b.amount) * 100);
+              const over = spent > b.amount;
+              return (
+                <div key={b.id} className="card-sm">
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "13px" }}>
+                    <span>{cat?.icon} {cat?.name}</span>
+                    <span style={{ color: over ? "var(--berry)" : "var(--sage)", fontWeight: 500 }}>{Math.round(pct)}%</span>
+                  </div>
+                  <div className="budget-bar-bg">
+                    <div className="budget-bar-fill" style={{ width: pct + "%", background: over ? "var(--berry)" : cat?.color }} />
+                  </div>
+                  <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "4px" }}>{data.currency}{fmt(spent)} of {data.currency}{fmt(b.amount)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Expenses Page ─────────────────────────────────────────────────────────────
+function ExpensesPage({ data, setData }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterAcc, setFilterAcc] = useState("all");
+  const [filterMonth, setFilterMonth] = useState("");
+  const [search, setSearch] = useState("");
+
+  const getCat = id => data.categories.find(c => c.id === id);
+  const getAcc = id => data.accounts.find(a => a.id === id);
+
+  const filtered = data.expenses.filter(e => {
+    if (filterCat !== "all" && e.categoryId !== filterCat) return false;
+    if (filterAcc !== "all" && e.accountId !== filterAcc) return false;
+    if (filterMonth && !e.date?.startsWith(filterMonth)) return false;
+    if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const saveExpense = (exp) => {
+    if (editing) {
+      setData(d => ({ ...d, expenses: d.expenses.map(e => e.id === exp.id ? exp : e) }));
+    } else {
+      setData(d => ({ ...d, expenses: [exp, ...d.expenses] }));
+    }
+    setShowForm(false); setEditing(null);
+  };
+
+  const deleteExpense = (id) => setData(d => ({ ...d, expenses: d.expenses.filter(e => e.id !== id) }));
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Expenses</div>
+          <div className="page-subtitle">Track everything, judge nothing</div>
+        </div>
+        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>
+          <Icon name="plus" size={15} /> Add expense
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "20px", alignItems: "center" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search..." style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", width: "180px", background: "var(--surface2)", color: "var(--text)" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", background: "var(--surface2)", color: "var(--text)" }} />
+          {filterMonth && <button className="btn btn-ghost btn-sm" onClick={() => setFilterMonth("")} style={{ fontSize: "12px", padding: "6px 10px", color: "var(--text2)" }}>All time ×</button>}
+        </div>
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", background: "var(--surface2)", color: "var(--text)" }}>
+          <option value="all">All categories</option>
+          {data.categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+        </select>
+        <select value={filterAcc} onChange={e => setFilterAcc(e.target.value)} style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", background: "var(--surface2)", color: "var(--text)" }}>
+          <option value="all">All accounts</option>
+          {data.accounts.map(a => <option key={a.id} value={a.id}>{a.icon} {a.name}</option>)}
+        </select>
+        <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "4px" }}>{filtered.length} expense{filtered.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="empty"><div className="empty-text">No expenses match your filters</div></div>
+      ) : filtered.map(e => {
+        const cat = getCat(e.categoryId);
+        const acc = getAcc(e.accountId);
+        return (
+          <div key={e.id} className="expense-item">
+            <div className="expense-dot" style={{ background: cat?.color }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div className="expense-name">{e.name}</div>
+                {e.recurring && <span className="rec-badge"><Icon name="repeat" size={10} /> {e.recurringPeriod}</span>}
+              </div>
+              <div className="expense-meta">
+                <span>{cat?.icon} {cat?.name}</span>
+                <span>·</span>
+                <span>{acc?.icon} {acc?.name}</span>
+                <span>·</span>
+                <span>{e.date}</span>
+                <span className="type-chip">{e.type}</span>
+                {e.tags.map(t => <span key={t} className="tag-chip"># {t}</span>)}
+              </div>
+              {e.note && <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "3px", fontStyle: "italic", paddingLeft: "2px", borderLeft: "2px solid var(--border)" }}>{e.note}</div>}
+            </div>
+            <div className={`expense-amount ${e.recurring ? "recurring" : ""}`}>{data.currency}{fmt(e.amount)}</div>
+            <button className="btn-icon" onClick={() => { setEditing(e); setShowForm(true); }}><Icon name="edit" size={14} /></button>
+            <button className="btn-icon btn-danger" onClick={() => deleteExpense(e.id)}><Icon name="trash" size={14} /></button>
+          </div>
+        );
+      })}
+
+      {(showForm || editing) && (
+        <Modal title={editing ? "Edit Expense" : "New Expense"} onClose={() => { setShowForm(false); setEditing(null); }}>
+          <ExpenseForm categories={data.categories} accounts={data.accounts} onSave={saveExpense} onClose={() => { setShowForm(false); setEditing(null); }} initial={editing} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Stats Page ────────────────────────────────────────────────────────────────
+function StatsPage({ data }) {
+  const [tab, setTab] = useState("categories");
+  const [month, setMonth] = useState(currentMonth());
+
+  const monthExpenses = data.expenses.filter(e => e.date?.startsWith(month));
+  const total = monthExpenses.reduce((s, e) => s + e.amount, 0);
+  const getCat = id => data.categories.find(c => c.id === id);
+  const getAcc = id => data.accounts.find(a => a.id === id);
+
+  const catSpend = {};
+  monthExpenses.forEach(e => { catSpend[e.categoryId] = (catSpend[e.categoryId] || 0) + e.amount; });
+
+  const accSpend = {};
+  monthExpenses.forEach(e => { accSpend[e.accountId] = (accSpend[e.accountId] || 0) + e.amount; });
+
+  const tagSpend = {};
+  monthExpenses.forEach(e => { e.tags.forEach(t => { tagSpend[t] = (tagSpend[t] || 0) + e.amount; }); });
+
+  const allExpenses = data.expenses;
+  const tagSpendAll = {};
+  allExpenses.forEach(e => { e.tags.forEach(t => { tagSpendAll[t] = (tagSpendAll[t] || 0) + e.amount; }); });
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Statistics</div>
+          <div className="page-subtitle">See where your money flows</div>
+        </div>
+        <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", background: "var(--surface2)", color: "var(--text)" }} />
+      </div>
+
+      <div className="tabs">
+        {["categories","accounts","tags"].map(t => <button key={t} className={`tab ${tab===t?"active":""}`} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>)}
+      </div>
+
+      {tab === "categories" && (
+        <div className="card">
+          <div style={{ marginBottom: "8px", fontSize: "13px", color: "var(--text3)" }}>Total: <strong style={{ color: "var(--text)", fontFamily: "Nunito", fontSize: "18px" }}>{data.currency}{fmt(total)}</strong></div>
+          <div style={{ height: "20px" }} />
+          {Object.entries(catSpend).sort((a,b) => b[1]-a[1]).map(([catId, amt]) => {
+            const cat = getCat(catId);
+            const pct = total > 0 ? (amt / total * 100).toFixed(1) : 0;
+            return (
+              <div key={catId} style={{ marginBottom: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "14px", marginBottom: "5px" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ width: "10px", height: "10px", borderRadius: "2px", background: cat?.color, display: "inline-block" }} />
+                    {cat?.icon} {cat?.name}
+                  </span>
+                  <span style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <span style={{ fontSize: "12px", color: "var(--text3)" }}>{pct}%</span>
+                    <strong style={{ fontFamily: "Nunito" }}>{data.currency}{fmt(amt)}</strong>
+                  </span>
+                </div>
+                <div className="budget-bar-bg">
+                  <div className="budget-bar-fill" style={{ width: pct + "%", background: cat?.color }} />
+                </div>
+              </div>
+            );
+          })}
+          {Object.keys(catSpend).length === 0 && <div className="empty"><div className="empty-text">No data for this month</div></div>}
+        </div>
+      )}
+
+      {tab === "accounts" && (
+        <div className="card">
+          {Object.entries(accSpend).sort((a,b) => b[1]-a[1]).map(([accId, amt]) => {
+            const acc = getAcc(accId);
+            const pct = total > 0 ? (amt / total * 100).toFixed(1) : 0;
+            return (
+              <div key={accId} style={{ marginBottom: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "14px", marginBottom: "5px" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ width: "10px", height: "10px", borderRadius: "50%", background: acc?.color, display: "inline-block" }} />
+                    {acc?.icon} {acc?.name}
+                  </span>
+                  <strong style={{ fontFamily: "Nunito" }}>{data.currency}{fmt(amt)}</strong>
+                </div>
+                <div className="budget-bar-bg">
+                  <div className="budget-bar-fill" style={{ width: pct + "%", background: acc?.color }} />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "3px" }}>{pct}% of spending</div>
+              </div>
+            );
+          })}
+          {Object.keys(accSpend).length === 0 && <div className="empty"><div className="empty-text">No data for this month</div></div>}
+        </div>
+      )}
+
+      {tab === "tags" && (
+        <div>
+          <div className="card" style={{ marginBottom: "16px" }}>
+            <div style={{ fontFamily: "Nunito", fontSize: "15px", marginBottom: "12px" }}>This month by tag</div>
+            {Object.entries(tagSpend).sort((a,b) => b[1]-a[1]).map(([tag, amt]) => (
+              <div key={tag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <span className="tag-chip"># {tag}</span>
+                <strong style={{ fontFamily: "Nunito" }}>{data.currency}{fmt(amt)}</strong>
+              </div>
+            ))}
+            {Object.keys(tagSpend).length === 0 && <div className="empty"><div className="empty-text">No tagged expenses this month</div></div>}
+          </div>
+          <div className="card">
+            <div style={{ fontFamily: "Nunito", fontSize: "15px", marginBottom: "12px" }}>All time by tag</div>
+            {Object.entries(tagSpendAll).sort((a,b) => b[1]-a[1]).map(([tag, amt]) => (
+              <div key={tag} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <span className="tag-chip sage"># {tag}</span>
+                <strong style={{ fontFamily: "Nunito" }}>{data.currency}{fmt(amt)}</strong>
+              </div>
+            ))}
+            {Object.keys(tagSpendAll).length === 0 && <div className="empty"><div className="empty-text">No tags used yet</div></div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Analysis Page ─────────────────────────────────────────────────────────────
+function AnalysisPage({ data }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [rawDebug, setRawDebug] = useState(null);
+
+  // Find most recent month that has expenses
+  const bestMonth = useMemo(() => {
+    if (!data.expenses || data.expenses.length === 0) return currentMonth();
+    const months = data.expenses
+      .map(e => e.date ? e.date.slice(0, 7) : null)
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    return months[0] || currentMonth();
+  }, [data.expenses]);
+
+  const [month, setMonth] = useState(() => bestMonth);
+
+  // Update month if bestMonth changes (e.g. new expense added)
+  useEffect(() => {
+    setMonth(bestMonth);
+  }, [bestMonth]);
+
+  const monthExpenses = data.expenses.filter(e => e.date && e.date.startsWith(month));
+  const getCat = id => data.categories.find(c => c.id === id);
+  const getAcc = id => data.accounts.find(a => a.id === id);
+
+  const generateLocalAnalysis = (expenses, cats, budgets, monthStr) => {
+    const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const catTotals = {};
+    expenses.forEach(e => {
+      const name = cats.find(c => c.id === e.categoryId)?.name || "Other";
+      catTotals[name] = (catTotals[name] || 0) + e.amount;
+    });
+    const sorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+    const top = sorted[0];
+    const recurringCount = expenses.filter(e => e.recurring).length;
+    const recurringTotal = expenses.filter(e => e.recurring).reduce((s, e) => s + e.amount, 0);
+    const tagSet = [...new Set(expenses.flatMap(e => e.tags || []))];
+
+    const insights = [];
+    if (top) insights.push({ emoji: "📊", title: "Biggest category: " + top[0], text: `€${fmt(top[1])} went to ${top[0]} this month, making up ${Math.round(top[1]/total*100)}% of your spending.` });
+    if (recurringCount > 0) insights.push({ emoji: "🔁", title: `${recurringCount} recurring payment${recurringCount > 1 ? "s" : ""}`, text: `€${fmt(recurringTotal)} of your spending is automatic. That's ${Math.round(recurringTotal/total*100)}% of your total — good to keep an eye on subscriptions creeping up!` });
+    if (sorted.length > 1) insights.push({ emoji: "🗂️", title: `Spending across ${sorted.length} categories`, text: sorted.slice(0,3).map(([n,a]) => `${n}: €${fmt(a)}`).join(", ") + "." });
+    if (tagSet.length > 0) insights.push({ emoji: "🏷️", title: "Tagged expenses", text: `You've tagged expenses with: ${tagSet.join(", ")}. Tags are great for tracking spending across categories!` });
+    const budgetOver = budgets.filter(b => {
+      const spent = expenses.filter(e => e.categoryId === b.categoryId).reduce((s, e) => s + e.amount, 0);
+      return spent > b.amount;
+    });
+    if (budgetOver.length > 0) insights.push({ emoji: "⚠️", title: "Budget check", text: `${budgetOver.length} budget${budgetOver.length > 1 ? "s are" : " is"} over limit this month. No stress — this is just information, not a judgment!` });
+    else if (budgets.length > 0) insights.push({ emoji: "✅", title: "On track with budgets!", text: "All your budget categories are within their limits this month. That's something to feel genuinely good about." });
+
+    return {
+      headline: `You spent €${fmt(total)} in ${monthLabel(monthStr)} — here's a gentle look at where it went `,
+      insights: insights.slice(0, 5),
+      tip: "Try reviewing your recurring payments once a month — it's easy to forget subscriptions you no longer use, and even small ones add up!",
+      encouragement: "Tracking your money at all is a big deal. Every entry you add is an act of self-care. You're doing great. "
+    };
+  };
+
+  const runAnalysis = async () => {
+    if (monthExpenses.length === 0) {
+      setError("No expenses found for " + monthLabel(month) + " — try a different month!");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setRawDebug(null);
+
+    const summary = monthExpenses.map(e => ({
+      name: e.name,
+      amount: e.amount,
+      category: getCat(e.categoryId)?.name || "Unknown",
+      account: getAcc(e.accountId)?.name || "Unknown",
+      recurring: e.recurring,
+      tags: e.tags || []
+    }));
+    const totalSpent = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const totalBudget = data.budgets.reduce((s, b) => s + (b.amount || 0), 0);
+
+    const systemPrompt = `You are a warm, ADHD-friendly financial assistant. You MUST respond with ONLY a valid JSON object. No markdown. No code fences. No preamble. No explanation. Start your response with { and end with }.`;
+    const userPrompt = `Analyse these expenses for ${monthLabel(month)}: ${JSON.stringify(summary)} Total: €${fmt(totalSpent)}${totalBudget > 0 ? `. Budget: €${fmt(totalBudget)}` : ""}. Return JSON: {"headline":"...","insights":[{"emoji":"...","title":"...","text":"..."}],"tip":"...","encouragement":"..."}. 3-5 insights, kind tone, no shame.`;
+
+    let usedAI = false;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        signal: controller.signal,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }]
+        })
+      });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const d = await response.json();
+        if (!d.error && d.content && Array.isArray(d.content)) {
+          const raw = d.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+          const jsonStart = raw.indexOf("{");
+          const jsonEnd = raw.lastIndexOf("}");
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+            setResult(parsed);
+            usedAI = true;
+          }
+        }
+      }
+    } catch (e) {
+      // API unreachable — fall through to local analysis
+      console.log("API unavailable, using local analysis:", e.message);
+    }
+
+    if (!usedAI) {
+      // Generate analysis locally from the data
+      const local = generateLocalAnalysis(monthExpenses, data.categories, data.budgets, month);
+      setResult(local);
+    }
+
+    setLoading(false);
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Smart Analysis</div>
+          <div className="page-subtitle">Your personal money advisor</div>
+        </div>
+        <input type="month" value={month} onChange={e => { setMonth(e.target.value); setResult(null); setError(null); }}
+          style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid var(--border)", fontFamily: "Nunito", fontSize: "13px", outline: "none", background: "var(--surface2)", color: "var(--text)" }} />
+      </div>
+
+      <div style={{ fontSize: "12px", color: "var(--text3)", marginBottom: "12px" }}>
+        {monthExpenses.length} expense{monthExpenses.length !== 1 ? "s" : ""} in {monthLabel(month)}
+      </div>
+
+      {!result && !loading && (
+        <div className="card" style={{ textAlign: "center", padding: "40px" }}>
+          <div style={{ fontFamily: "Nunito", fontSize: "20px", marginBottom: "8px" }}>Ready to understand your spending?</div>
+          <div style={{ fontSize: "14px", color: "var(--text3)", margin: "0 auto 24px", maxWidth: "340px" }}>
+            Get a warm, judgment-free analysis of {monthLabel(month)} with spending patterns, insights, and gentle tips.
+          </div>
+          <button className="btn btn-primary" onClick={runAnalysis} style={{ fontSize: "15px", padding: "12px 28px" }}>
+            <Icon name="sparkle" size={16} /> Analyse {monthLabel(month)}
+          </button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card" style={{ textAlign: "center", padding: "40px" }}>
+          <div style={{ width: "36px", height: "36px", margin: "0 auto 16px", borderRadius: "50%", border: "3px solid var(--berry-light)", borderTopColor: "var(--berry)", animation: "spin 0.8s linear infinite" }} />
+          <div style={{ fontFamily: "Nunito", fontSize: "18px", color: "var(--text2)" }}>Thinking about your month...</div>
+          <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
+
+```
+    </div>
+  )}
+
+  {error && (
+    <div className="card" style={{ borderColor: "var(--berry-mid)", marginBottom: "12px" }}>
+      <div style={{ color: "var(--berry)", fontSize: "13px", fontWeight: 500, marginBottom: "6px" }}>Something went wrong:</div>
+      <div style={{ color: "var(--text2)", fontSize: "12px", wordBreak: "break-word", lineHeight: 1.5 }}>{error}</div>
+      {rawDebug && <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--text3)", fontFamily: "monospace", background: "var(--surface2)", padding: "8px", borderRadius: "6px", wordBreak: "break-word" }}>Raw: {rawDebug}</div>}
+      <button className="btn btn-secondary btn-sm" style={{ marginTop: "12px" }} onClick={runAnalysis}>Try again</button>
+    </div>
+  )}
+
+  {result && (
+    <div>
+      <div className="analysis-card" style={{ marginBottom: "16px" }}>
+        <div style={{ fontFamily: "Nunito", fontSize: "20px", color: "var(--berry)", marginBottom: "4px" }}>{result.headline}</div>
+      </div>
+
+      <div className="card" style={{ marginBottom: "16px" }}>
+        <div className="analysis-title"><Icon name="sparkle" size={18} /> Insights</div>
+        {(result.insights || []).map((ins, i) => (
+          <div key={i} className="insight-item">
+            <div className="insight-icon">{ins.emoji}</div>
+            <div className="insight-text"><strong>{ins.title}</strong><br />{ins.text}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid-2">
+        <div className="card" style={{ background: "var(--sage-light)", borderColor: "var(--sage)", borderWidth: "1px" }}>
+          <div style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--sage)", marginBottom: "6px" }}>Tip for next month</div>
+          <div style={{ fontSize: "14px", color: "var(--text)", lineHeight: 1.5 }}>{result.tip}</div>
+        </div>
+        <div className="card" style={{ background: "var(--berry-light)", borderColor: "var(--berry-mid)", borderWidth: "1px" }}>
+          <div style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--berry)", marginBottom: "6px" }}>A note</div>
+          <div style={{ fontSize: "14px", color: "var(--text)", lineHeight: 1.5 }}>{result.encouragement}</div>
+        </div>
+      </div>
+
+      <div style={{ textAlign: "center", marginTop: "20px" }}>
+        <button className="btn btn-secondary" onClick={() => { setResult(null); setError(null); }}><Icon name="repeat" size={14} /> Run again</button>
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── Calendar Page ─────────────────────────────────────────────────────────────
+function CalendarPage({ data }) {
+const today = new Date();
+const [viewYear, setViewYear] = useState(today.getFullYear());
+const [viewMonth, setViewMonth] = useState(today.getMonth());
+
+const recurring = data.expenses.filter(e => e.recurring && e.recurringPeriod === “monthly” && e.recurringDay);
+const getDayEvents = (day) => recurring.filter(e => parseInt(e.recurringDay) === day);
+
+const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+const firstDay = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7; // Mon=0
+
+const monthName = new Date(viewYear, viewMonth).toLocaleString(“default”, { month: “long”, year: “numeric” });
+const getCat = id => data.categories.find(c => c.id === id);
+
+return (
+<div className="page">
+<div className="page-header">
+<div>
+<div className="page-title">Payment Calendar</div>
+<div className="page-subtitle">When things leave your account</div>
+</div>
+<div style={{ display: “flex”, gap: “8px”, alignItems: “center” }}>
+<button className=“btn btn-secondary btn-sm” onClick={() => { let m = viewMonth - 1; let y = viewYear; if (m < 0) { m = 11; y–; } setViewMonth(m); setViewYear(y); }}>‹</button>
+<span style={{ fontFamily: “Nunito”, fontSize: “16px”, minWidth: “160px”, textAlign: “center” }}>{monthName}</span>
+<button className=“btn btn-secondary btn-sm” onClick={() => { let m = viewMonth + 1; let y = viewYear; if (m > 11) { m = 0; y++; } setViewMonth(m); setViewYear(y); }}>›</button>
+</div>
+</div>
+
+```
+  <div className="card" style={{ marginBottom: "20px" }}>
+    <div className="cal-grid" style={{ marginBottom: "8px" }}>
+      {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d => <div key={d} className="cal-header-cell">{d}</div>)}
+    </div>
+    <div className="cal-grid">
+      {Array(firstDay).fill(null).map((_, i) => <div key={"e"+i} className="cal-day empty" />)}
+      {Array(daysInMonth).fill(null).map((_, i) => {
+        const day = i + 1;
+        const events = getDayEvents(day);
+        const isToday = day === today.getDate() && viewMonth === today.getMonth() && viewYear === today.getFullYear();
+        return (
+          <div key={day} className={`cal-day ${isToday ? "today" : ""} ${events.length > 0 ? "has-event" : ""}`} title={events.map(e => e.name).join(", ")}>
+            <span>{day}</span>
+            {events.length > 0 && <div className="cal-day-dot" />}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+
+  <div className="card">
+    <div style={{ fontFamily: "Nunito", fontSize: "16px", marginBottom: "14px" }}>Recurring this month</div>
+    {recurring.length === 0 ? (
+      <div className="empty"><div className="empty-text">No recurring payments set up yet</div></div>
+    ) : recurring.sort((a, b) => parseInt(a.recurringDay) - parseInt(b.recurringDay)).map(e => {
+      const cat = getCat(e.categoryId);
+      const isPast = parseInt(e.recurringDay) < today.getDate() && viewMonth === today.getMonth() && viewYear === today.getFullYear();
+      return (
+        <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 0", borderBottom: "1px solid var(--border)", opacity: isPast ? 0.6 : 1 }}>
+          <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: cat?.color + "30", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px" }}>{cat?.icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "14px", fontWeight: 500 }}>{e.name}</div>
+            <div style={{ fontSize: "12px", color: "var(--text3)" }}>{cat?.name} · {e.recurringDay}. of month</div>
+            {e.note && <div style={{ fontSize: "11px", color: "var(--text3)", fontStyle: "italic" }}>{e.note}</div>}
+          </div>
+          <div>
+            <div style={{ fontFamily: "Nunito", fontSize: "16px" }}>€{fmt(e.amount)}</div>
+            {isPast && <div style={{ fontSize: "11px", color: "var(--sage)", textAlign: "right" }}>✓ done</div>}
+          </div>
+        </div>
+      );
+    })}
+  </div>
+</div>
+```
+
+);
+}
+
+// ─── Notes Page ────────────────────────────────────────────────────────────────
+function NotesPage({ data, setData }) {
+const [text, setText] = useState(””);
+
+const addNote = () => {
+if (!text.trim()) return;
+const note = { id: uid(), text: text.trim(), date: new Date().toISOString().slice(0, 10), pinned: false };
+setData(d => ({ …d, notes: [note, …d.notes] }));
+setText(””);
+};
+
+const deleteNote = (id) => setData(d => ({ …d, notes: d.notes.filter(n => n.id !== id) }));
+const togglePin = (id) => setData(d => ({ …d, notes: d.notes.map(n => n.id === id ? { …n, pinned: !n.pinned } : n) }));
+
+const sorted = […data.notes].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
+return (
+<div className="page">
+<div className="page-header">
+<div>
+<div className="page-title">Notes</div>
+<div className="page-subtitle">Little reminders for your future self</div>
+</div>
+</div>
+
+```
+  <div className="card" style={{ marginBottom: "20px" }}>
+    <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Remind yourself of a payment, note an upcoming expense, jot down anything..." style={{ width: "100%", border: "none", outline: "none", fontFamily: "Nunito", fontSize: "14px", color: "var(--text)", resize: "none", minHeight: "80px", background: "transparent" }} />
+    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
+      <button className="btn btn-primary btn-sm" onClick={addNote}><Icon name="plus" size={13} /> Add note</button>
+    </div>
+  </div>
+
+  {sorted.length === 0 ? (
+    <div className="empty"><div className="empty-text">No notes yet — add one above!</div></div>
+  ) : sorted.map(n => (
+    <div key={n.id} className={`note-card ${n.pinned ? "pinned" : ""}`}>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: "14px", color: "var(--text)", lineHeight: 1.5 }}>{n.text}</div>
+        <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "4px" }}>{n.date}</div>
+      </div>
+      <button className="btn-icon" title={n.pinned ? "Unpin" : "Pin"} onClick={() => togglePin(n.id)} style={{ color: n.pinned ? "var(--gold)" : "var(--text3)", fontWeight: "bold", fontSize: "12px", width: "28px", height: "28px", borderRadius: "6px", border: "1px solid var(--border)", background: n.pinned ? "var(--gold-light)" : "none" }}>
+          {n.pinned ? "★" : "☆"}
+        </button>
+      <button className="btn-icon" onClick={() => deleteNote(n.id)}><Icon name="trash" size={14} /></button>
+    </div>
+  ))}
+</div>
+```
+
+);
+}
+
+// ─── Budgets Page ─────────────────────────────────────────────────────────────
+function BudgetsPage({ data, setData }) {
+const [showForm, setShowForm] = useState(false);
+const [form, setForm] = useState({ categoryId: data.categories[0]?.id, amount: “”, period: “monthly” });
+
+const month = currentMonth();
+const monthExp = data.expenses.filter(e => e.date?.startsWith(month));
+const getCat = id => data.categories.find(c => c.id === id);
+
+const saveBudget = () => {
+if (!form.amount) return;
+const existing = data.budgets.find(b => b.categoryId === form.categoryId);
+if (existing) {
+setData(d => ({ …d, budgets: d.budgets.map(b => b.categoryId === form.categoryId ? { …b, amount: parseFloat(form.amount), period: form.period } : b) }));
+} else {
+setData(d => ({ …d, budgets: […d.budgets, { id: uid(), …form, amount: parseFloat(form.amount) }] }));
+}
+setShowForm(false);
+setForm({ categoryId: data.categories[0]?.id, amount: “”, period: “monthly” });
+};
+
+const deleteBudget = (id) => setData(d => ({ …d, budgets: d.budgets.filter(b => b.id !== id) }));
+
+return (
+<div className="page">
+<div className="page-header">
+<div>
+<div className="page-title">Budgets</div>
+<div className="page-subtitle">Gentle guardrails, not a cage</div>
+</div>
+<button className=“btn btn-primary” onClick={() => setShowForm(true)}><Icon name="plus" size={15} /> Set budget</button>
+</div>
+
+```
+  {data.budgets.length === 0 ? (
+    <div className="empty"><div className="empty-text">No budgets set yet. Add one to start tracking!</div></div>
+  ) : data.budgets.map(b => {
+    const cat = getCat(b.categoryId);
+    const spent = monthExp.filter(e => e.categoryId === b.categoryId).reduce((s, e) => s + e.amount, 0);
+    const pct = Math.min(100, (spent / b.amount) * 100);
+    const over = spent > b.amount;
+    const remaining = b.amount - spent;
+    return (
+      <div key={b.id} className="card" style={{ marginBottom: "12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "Nunito", fontSize: "17px" }}>
+              <span style={{ width: "12px", height: "12px", borderRadius: "3px", background: cat?.color, display: "inline-block" }} />
+              {cat?.icon} {cat?.name}
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>{b.period} budget</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontFamily: "Nunito", fontSize: "20px", color: over ? "var(--berry)" : "var(--text)" }}>€{fmt(spent)}</div>
+            <div style={{ fontSize: "12px", color: "var(--text3)" }}>of €{fmt(b.amount)}</div>
+          </div>
+        </div>
+        <div className="budget-bar-bg" style={{ height: "10px", marginBottom: "6px" }}>
+          <div className="budget-bar-fill" style={{ width: pct + "%", background: over ? "var(--berry)" : cat?.color }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: "13px", color: over ? "var(--berry)" : "var(--sage)" }}>
+            {over ? `⚠️ Over by €${fmt(-remaining)}` : `✓ €${fmt(remaining)} remaining`}
+          </div>
+          <button className="btn-icon" onClick={() => deleteBudget(b.id)}><Icon name="trash" size={14} /></button>
+        </div>
+      </div>
+    );
+  })}
+
+  {showForm && (
+    <Modal title="Set Budget" onClose={() => setShowForm(false)}>
+      <div className="field">
+        <label>Category</label>
+        <select value={form.categoryId} onChange={e => setForm(f => ({ ...f, categoryId: e.target.value }))}>
+          {data.categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+        </select>
+      </div>
+      <div className="form-row">
+        <div className="field">
+          <label>Amount (€)</label>
+          <input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
+        </div>
+        <div className="field">
+          <label>Period</label>
+          <select value={form.period} onChange={e => setForm(f => ({ ...f, period: e.target.value }))}>
+            <option value="monthly">Monthly</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+        <button className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
+        <button className="btn btn-primary" onClick={saveBudget}>Save Budget</button>
+      </div>
+    </Modal>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── Admin Panel ──────────────────────────────────────────────────────────────
+// Password-protected panel for the app owner to configure links.
+// Regular users never see this — it’s hidden behind a secret tap sequence.
+const ADMIN_PASSWORD = “bloom2024admin”; // Change this to something only you know
+
+function AdminPanel({ onClose }) {
+const [authed, setAuthed] = useState(false);
+const [pw, setPw] = useState(””);
+const [pwError, setPwError] = useState(false);
+const [cfg, setCfg] = useState(getAdminConfig());
+const [saved, setSaved] = useState(false);
+
+const login = () => {
+if (pw === ADMIN_PASSWORD) { setAuthed(true); setPwError(false); }
+else { setPwError(true); setPw(””); }
+};
+
+const save = () => {
+saveAdminConfig(cfg);
+setSaved(true);
+setTimeout(() => setSaved(false), 2000);
+};
+
+const inputStyle = {
+width: “100%”, padding: “11px 14px”, borderRadius: “var(–radius-sm)”,
+border: “1.5px solid var(–border)”, background: “var(–surface2)”,
+fontFamily: “Nunito”, fontSize: “14px”, color: “var(–text)”, outline: “none”,
+boxSizing: “border-box”,
+};
+
+return (
+<div style={{
+position: “fixed”, inset: 0, zIndex: 300,
+background: “rgba(10,6,14,0.92)”, backdropFilter: “blur(10px)”,
+display: “flex”, alignItems: “center”, justifyContent: “center”, padding: “24px”,
+}}>
+<div style={{
+background: “var(–surface)”, borderRadius: “20px”, padding: “28px”,
+width: “100%”, maxWidth: “400px”, border: “1px solid var(–border)”,
+boxShadow: “var(–shadow-lg)”,
+}}>
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, marginBottom: “22px” }}>
+<div style={{ fontWeight: 700, fontSize: “18px”, color: “var(–text)”, fontFamily: “Nunito” }}>
+{authed ? “Admin settings” : “Admin access”}
+</div>
+<button onClick={onClose} style={{ background: “none”, border: “none”, color: “var(–text3)”, cursor: “pointer”, fontSize: “20px”, padding: “4px” }}>×</button>
+</div>
+
+```
+    {!authed ? (
+      <div>
+        <div style={{ fontSize: "13px", color: "var(--text3)", marginBottom: "16px" }}>
+          This area is for the app owner only.
+        </div>
+        <input
+          type="password" value={pw} onChange={e => { setPw(e.target.value); setPwError(false); }}
+          onKeyDown={e => e.key === "Enter" && login()}
+          placeholder="Enter password" style={{ ...inputStyle, marginBottom: "10px" }}
+          autoFocus
+        />
+        {pwError && <div style={{ fontSize: "12px", color: "var(--berry)", marginBottom: "10px" }}>Incorrect password</div>}
+        <button onClick={login} style={{
+          width: "100%", padding: "12px", borderRadius: "100px", border: "none",
+          background: "var(--berry)", color: "white", fontFamily: "Nunito",
+          fontSize: "14px", fontWeight: 700, cursor: "pointer",
+        }}>
+          Unlock
+        </button>
+      </div>
+    ) : (
+      <div>
+        <div style={{ fontSize: "12px", color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Ko-fi URL</div>
+        <input value={cfg.kofiUrl} onChange={e => setCfg(c => ({ ...c, kofiUrl: e.target.value }))}
+          style={{ ...inputStyle, marginBottom: "16px" }} placeholder="https://ko-fi.com/yourname" />
+
+        <div style={{ fontSize: "12px", color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Feedback email</div>
+        <input value={cfg.feedbackEmail} onChange={e => setCfg(c => ({ ...c, feedbackEmail: e.target.value }))}
+          style={{ ...inputStyle, marginBottom: "16px" }} placeholder="your@email.com" />
+
+        <div style={{ fontSize: "12px", color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Admin password</div>
+        <input value={cfg.adminPassword || ""} onChange={e => setCfg(c => ({ ...c, adminPassword: e.target.value }))}
+          style={{ ...inputStyle, marginBottom: "6px" }} placeholder="Leave blank to keep current" type="password" />
+        <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "16px" }}>
+          Changing this only takes effect after saving and reloading.
+        </div>
+
+        <button onClick={save} style={{
+          width: "100%", padding: "12px", borderRadius: "100px", border: "none",
+          background: saved ? "var(--sage)" : "var(--berry)", color: "white",
+          fontFamily: "Nunito", fontSize: "14px", fontWeight: 700, cursor: "pointer",
+          transition: "background 0.2s",
+        }}>
+          {saved ? "Saved!" : "Save settings"}
+        </button>
+      </div>
+    )}
+  </div>
+</div>
+```
+
+);
+}
+
+// ─── Tutorial Modal ────────────────────────────────────────────────────────────
+const TUTORIAL_SLIDES = [
+{
+icon: “🌸”,
+title: “Welcome to BloomBudget”,
+body: “A budget tracker built for real life — warm, simple, and judgment-free. This quick tour covers everything you need to get started. Tap Next whenever you’re ready.”,
+color: “#E8809A”,
+},
+{
+icon: “＋”,
+title: “Adding expenses”,
+body: “Tap Add expense on the Expenses page to log anything — a coffee, a subscription, your rent. Give it a name, amount, category, and account. That’s all you need.”,
+tip: “The date auto-fills to today, but you can change it to log past expenses too.”,
+color: “#F0A870”,
+},
+{
+icon: “🗂”,
+title: “Categories”,
+body: “Categories are the broad buckets — Food, Transport, Health, Pet Food, and so on. They power your statistics and budget tracking. You can add your own and pick a colour in Settings.”,
+tip: “Keep categories broad. Use tags for the detail.”,
+color: “#70D098”,
+},
+{
+icon: “#”,
+title: “Tags — the secret weapon”,
+body: “Tags cut across categories. For example, tag everything related to a pet, a person, or a project — food, vet bills, gear — and see the combined total in one place under Statistics → Tags.”,
+tip: “One expense can have multiple tags. Add them in the expense form.”,
+color: “#E8C860”,
+},
+{
+icon: “↺”,
+title: “Recurring payments”,
+body: “When adding an expense, tick Recurring and set the day of the month. It will show up on your Payment Calendar so you always know what’s coming and when.”,
+tip: “Streaming services, rent, insurance, subscriptions — set them up once and bloom keeps track so you don’t have to.”,
+color: “#F08898”,
+},
+{
+icon: “◎”,
+title: “Budgets”,
+body: “Set a monthly limit for any category on the Budgets page. bloom will show you a progress bar and warn you gently if you’re getting close — no alarms, just awareness.”,
+color: “#70B8E0”,
+},
+{
+icon: “✦”,
+title: “Smart Analysis”,
+body: “Head to Analysis and tap Analyse to get a warm, personalised breakdown of your spending — top categories, patterns, and a gentle tip for next month. Powered by AI.”,
+tip: “Works best once you have a few weeks of data.”,
+color: “#C0A0F0”,
+},
+{
+icon: “↓”,
+title: “Export to Excel”,
+body: “In Settings → Export, you can download your data as a spreadsheet — by week, month, year, or all time. Filter by category or tag. Great for tax time or sharing with a partner.”,
+color: “#7EC8A0”,
+},
+{
+icon: “♥”,
+title: “You’re all set”,
+body: “bloom saves everything automatically. Your data lives on your device and is completely private. If you ever have questions or ideas, the feedback button is always in Settings.”,
+tip: “You can replay this tour anytime from Settings → General.”,
+color: “#E8809A”,
+},
+];
+
+function TutorialModal({ onClose }) {
+const [step, setStep] = useState(0);
+const slide = TUTORIAL_SLIDES[step];
+const isLast = step === TUTORIAL_SLIDES.length - 1;
+const isFirst = step === 0;
+
+return (
+<div style={{
+position: “fixed”, inset: 0, zIndex: 200,
+background: “rgba(10,6,14,0.85)”, backdropFilter: “blur(8px)”,
+display: “flex”, alignItems: “flex-end”, justifyContent: “center”,
+padding: “0 0 env(safe-area-inset-bottom)”,
+}}>
+<div style={{
+background: “var(–surface)”, borderRadius: “24px 24px 0 0”,
+width: “100%”, maxWidth: “520px”, padding: “32px 28px 36px”,
+boxShadow: “0 -8px 40px rgba(0,0,0,0.5)”,
+border: “1px solid var(–border)”, borderBottom: “none”,
+minHeight: “420px”, display: “flex”, flexDirection: “column”,
+}}>
+
+```
+    {/* Progress dots */}
+    <div style={{ display: "flex", gap: "6px", justifyContent: "center", marginBottom: "28px" }}>
+      {TUTORIAL_SLIDES.map((_, i) => (
+        <div key={i} onClick={() => setStep(i)} style={{
+          width: i === step ? "20px" : "6px", height: "6px",
+          borderRadius: "100px", cursor: "pointer",
+          background: i === step ? slide.color : "var(--border)",
+          transition: "all 0.25s ease",
+        }} />
+      ))}
+    </div>
+
+    {/* Icon */}
+    <div style={{
+      width: "64px", height: "64px", borderRadius: "18px",
+      background: slide.color + "25", border: "1.5px solid " + slide.color + "60",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: "28px", marginBottom: "20px", fontWeight: 700,
+      color: slide.color, fontFamily: "Nunito",
+    }}>
+      {slide.icon}
+    </div>
+
+    {/* Content */}
+    <div style={{ flex: 1 }}>
+      <div style={{
+        fontFamily: "Nunito", fontWeight: 700, fontSize: "22px",
+        color: "var(--text)", marginBottom: "12px", lineHeight: 1.2,
+      }}>
+        {slide.title}
+      </div>
+      <div style={{
+        fontSize: "15px", color: "var(--text2)", lineHeight: 1.65,
+        marginBottom: slide.tip ? "14px" : 0,
+      }}>
+        {slide.body}
+      </div>
+      {slide.tip && (
+        <div style={{
+          fontSize: "13px", color: slide.color, lineHeight: 1.55,
+          background: slide.color + "15", borderRadius: "10px",
+          padding: "10px 14px", borderLeft: "3px solid " + slide.color,
+        }}>
+          {slide.tip}
+        </div>
+      )}
+    </div>
+
+    {/* Buttons */}
+    <div style={{ display: "flex", gap: "10px", marginTop: "28px", alignItems: "center" }}>
+      {!isFirst && (
+        <button onClick={() => setStep(s => s - 1)}
+          style={{ padding: "12px 18px", borderRadius: "100px", border: "1.5px solid var(--border)", background: "none", fontFamily: "Nunito", fontSize: "14px", color: "var(--text3)", cursor: "pointer" }}>
+          Back
+        </button>
+      )}
+      <button onClick={isLast ? onClose : () => setStep(s => s + 1)}
+        style={{
+          flex: 1, padding: "14px", borderRadius: "100px", border: "none",
+          background: slide.color, color: "white", fontFamily: "Nunito",
+          fontSize: "15px", fontWeight: 700, cursor: "pointer",
+          boxShadow: "0 4px 16px " + slide.color + "50",
+          transition: "all 0.15s",
+        }}>
+        {isLast ? "Let's go" : "Next"}
+      </button>
+      {!isLast && (
+        <button onClick={onClose}
+          style={{ padding: "12px 18px", borderRadius: "100px", border: "none", background: "none", fontFamily: "Nunito", fontSize: "13px", color: "var(--text3)", cursor: "pointer" }}>
+          Skip
+        </button>
+      )}
+    </div>
+  </div>
+</div>
+```
+
+);
+}
+
+// ─── Export Tab ───────────────────────────────────────────────────────────────
+function ExportTab({ data }) {
+const [period, setPeriod] = useState(“month”);
+const [filterType, setFilterType] = useState(“all”);
+const [filterValue, setFilterValue] = useState(””);
+const [customFrom, setCustomFrom] = useState(””);
+const [customTo, setCustomTo] = useState(””);
+const [exporting, setExporting] = useState(false);
+const [done, setDone] = useState(false);
+const [error, setError] = useState(null);
+
+const getCat = id => data.categories.find(c => c.id === id);
+const getAcc = id => data.accounts.find(a => a.id === id);
+
+const allTags = […new Set(data.expenses.flatMap(e => e.tags || []))].sort();
+
+const getDateRange = () => {
+const now = new Date();
+if (period === “week”) {
+const mon = new Date(now); mon.setDate(now.getDate() - now.getDay() + 1); mon.setHours(0,0,0,0);
+const sun = new Date(mon); sun.setDate(mon.getDate() + 6); sun.setHours(23,59,59,999);
+return [mon, sun];
+}
+if (period === “month”) {
+return [new Date(now.getFullYear(), now.getMonth(), 1), new Date(now.getFullYear(), now.getMonth()+1, 0, 23, 59, 59)];
+}
+if (period === “year”) {
+return [new Date(now.getFullYear(), 0, 1), new Date(now.getFullYear(), 11, 31, 23, 59, 59)];
+}
+if (period === “custom”) {
+return [customFrom ? new Date(customFrom) : new Date(0), customTo ? new Date(customTo + “T23:59:59”) : new Date()];
+}
+return [new Date(0), new Date()]; // all time
+};
+
+const getFilteredExpenses = () => {
+const [from, to] = getDateRange();
+return data.expenses.filter(e => {
+if (!e.date) return false;
+const d = new Date(e.date);
+if (d < from || d > to) return false;
+if (filterType === “category” && filterValue && e.categoryId !== filterValue) return false;
+if (filterType === “tag” && filterValue && !(e.tags || []).includes(filterValue)) return false;
+return true;
+}).sort((a, b) => new Date(a.date) - new Date(b.date));
+};
+
+const previewCount = getFilteredExpenses().length;
+
+const loadXLSX = () => new Promise((resolve, reject) => {
+if (window.XLSX) return resolve(window.XLSX);
+const s = document.createElement(“script”);
+s.src = “https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js”;
+s.onload = () => resolve(window.XLSX);
+s.onerror = reject;
+document.head.appendChild(s);
+});
+
+const doExport = async () => {
+setExporting(true);
+setDone(false);
+setError(null);
+const expenses = getFilteredExpenses();
+
+```
+// ── Sheet 1: All Transactions ──
+const txRows = expenses.map(e => ({
+  "Date": e.date,
+  "Name": e.name,
+  "Amount (€)": e.amount,
+  "Category": getCat(e.categoryId)?.name || "",
+  "Account": getAcc(e.accountId)?.name || "",
+  "Type": e.type || "",
+  "Recurring": e.recurring ? "Yes" : "No",
+  "Recurring Period": e.recurring ? (e.recurringPeriod || "") : "",
+  "Recurring Day": e.recurring ? (e.recurringDay || "") : "",
+  "Tags": (e.tags || []).join(", "),
+  "Note": e.note || "",
+}));
+
+// ── Sheet 2: Summary by Category ──
+const catMap = {};
+expenses.forEach(e => {
+  const name = getCat(e.categoryId)?.name || "Unknown";
+  if (!catMap[name]) catMap[name] = { count: 0, total: 0 };
+  catMap[name].count++;
+  catMap[name].total += e.amount;
+});
+const total = expenses.reduce((s, e) => s + e.amount, 0);
+const catRows = Object.entries(catMap).sort((a,b) => b[1].total - a[1].total).map(([cat, v]) => ({
+  "Category": cat,
+  "Transactions": v.count,
+  "Total (€)": parseFloat(v.total.toFixed(2)),
+  "% of Total": total > 0 ? parseFloat((v.total / total * 100).toFixed(1)) : 0,
+}));
+catRows.push({ "Category": "TOTAL", "Transactions": expenses.length, "Total (€)": parseFloat(total.toFixed(2)), "% of Total": 100 });
+
+// ── Sheet 3: Summary by Tag ──
+const tagMap = {};
+expenses.forEach(e => {
+  (e.tags || []).forEach(t => {
+    if (!tagMap[t]) tagMap[t] = { count: 0, total: 0 };
+    tagMap[t].count++;
+    tagMap[t].total += e.amount;
+  });
+});
+const tagRows = Object.entries(tagMap).sort((a,b) => b[1].total - a[1].total).map(([tag, v]) => ({
+  "Tag": tag,
+  "Transactions": v.count,
+  "Total (€)": parseFloat(v.total.toFixed(2)),
+}));
+if (!tagRows.length) tagRows.push({ "Tag": "No tags in this period", "Transactions": 0, "Total (€)": 0 });
+
+// ── Sheet 4: Summary by Account ──
+const accMap = {};
+expenses.forEach(e => {
+  const name = getAcc(e.accountId)?.name || "Unknown";
+  if (!accMap[name]) accMap[name] = { count: 0, total: 0 };
+  accMap[name].count++;
+  accMap[name].total += e.amount;
+});
+const accRows = Object.entries(accMap).sort((a,b) => b[1].total - a[1].total).map(([acc, v]) => ({
+  "Account": acc,
+  "Transactions": v.count,
+  "Total (€)": parseFloat(v.total.toFixed(2)),
+}));
+
+// ── Sheet 5: Monthly Breakdown ──
+const monthMap = {};
+data.expenses.forEach(e => {
+  const m = e.date?.slice(0,7);
+  if (!m) return;
+  if (!monthMap[m]) monthMap[m] = 0;
+  monthMap[m] += e.amount;
+});
+const monthRows = Object.entries(monthMap).sort().map(([m, v]) => ({
+  "Month": m,
+  "Total (€)": parseFloat(v.toFixed(2)),
+}));
+
+// ── Build workbook ──
+let XL;
+try { XL = await loadXLSX(); } catch(e) { setError("Could not load Excel library. Check your connection."); setExporting(false); return; }
+
+const wb = XL.utils.book_new();
+
+const addSheet = (name, rows) => {
+  const ws = XL.utils.json_to_sheet(rows);
+  const cols = Object.keys(rows[0] || {});
+  ws["!cols"] = cols.map(k => ({ wch: Math.max(k.length, 14) }));
+  XL.utils.book_append_sheet(wb, ws, name);
+};
+
+const periodLabel = { week: "This Week", month: "This Month", year: "This Year", all: "All Time", custom: "Custom Range" }[period];
+const filterLabel = filterType === "category" && filterValue ? ` — ${getCat(filterValue)?.name}` : filterType === "tag" && filterValue ? ` — #${filterValue}` : "";
+
+if (txRows.length) addSheet("Transactions", txRows);
+else addSheet("Transactions", [{ "Note": "No transactions in this period" }]);
+addSheet("By Category", catRows);
+if (tagRows.length) addSheet("By Tag", tagRows);
+addSheet("By Account", accRows);
+addSheet("Monthly Overview", monthRows);
+
+// ── Summary sheet ──
+const summaryData = [
+  { "": "Export generated", "Value": new Date().toLocaleDateString("de-DE") },
+  { "": "Period", "Value": periodLabel + filterLabel },
+  { "": "Transactions included", "Value": expenses.length },
+  { "": "Total amount", "Value": parseFloat(total.toFixed(2)) },
+  { "": "", "Value": "" },
+  { "": "bloom budget app", "Value": "your money, kindly" },
+];
+const sumWs = XL.utils.json_to_sheet(summaryData, { skipHeader: true });
+sumWs["!cols"] = [{ wch: 26 }, { wch: 30 }];
+XL.utils.book_append_sheet(wb, sumWs, "Summary");
+// Move Summary to front
+wb.SheetNames = ["Summary", ...wb.SheetNames.filter(s => s !== "Summary")];
+
+const filename = `bloom_export_${period}_${new Date().toISOString().slice(0,10)}.xlsx`;
+XL.writeFile(wb, filename);
+
+setExporting(false);
+setDone(true);
+setTimeout(() => setDone(false), 3000);
+```
+
+};
+
+const fieldStyle = { padding: “9px 13px”, borderRadius: “var(–radius-sm)”, border: “1.5px solid var(–border)”, background: “var(–surface2)”, fontFamily: “Nunito”, fontSize: “13px”, color: “var(–text)”, outline: “none”, width: “100%” };
+
+return (
+<div>
+<div className=“card” style={{ marginBottom: “14px” }}>
+<div style={{ fontWeight: 600, fontSize: “15px”, marginBottom: “14px”, color: “var(–text)” }}>Time period</div>
+<div style={{ display: “flex”, gap: “8px”, flexWrap: “wrap”, marginBottom: period === “custom” ? “14px” : 0 }}>
+{[[“week”,“This week”],[“month”,“This month”],[“year”,“This year”],[“all”,“All time”],[“custom”,“Custom”]].map(([v,l]) => (
+<button key={v} onClick={() => setPeriod(v)}
+style={{ padding: “8px 14px”, borderRadius: “100px”, border: “1.5px solid”, cursor: “pointer”, fontFamily: “Nunito”, fontSize: “13px”, fontWeight: period === v ? 700 : 400,
+borderColor: period === v ? “var(–berry)” : “var(–border)”,
+background: period === v ? “var(–berry-light)” : “var(–surface2)”,
+color: period === v ? “var(–berry)” : “var(–text2)” }}>
+{l}
+</button>
+))}
+</div>
+{period === “custom” && (
+<div style={{ display: “grid”, gridTemplateColumns: “1fr 1fr”, gap: “10px”, marginTop: “12px” }}>
+<div className=“field” style={{ marginBottom: 0 }}>
+<label>From</label>
+<input type=“date” value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={fieldStyle} />
+</div>
+<div className=“field” style={{ marginBottom: 0 }}>
+<label>To</label>
+<input type=“date” value={customTo} onChange={e => setCustomTo(e.target.value)} style={fieldStyle} />
+</div>
+</div>
+)}
+</div>
+
+```
+  <div className="card" style={{ marginBottom: "14px" }}>
+    <div style={{ fontWeight: 600, fontSize: "15px", marginBottom: "14px", color: "var(--text)" }}>Filter by</div>
+    <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+      {[["all","No filter"],["category","Category"],["tag","Tag"]].map(([v,l]) => (
+        <button key={v} onClick={() => { setFilterType(v); setFilterValue(""); }}
+          style={{ padding: "8px 14px", borderRadius: "100px", border: "1.5px solid", cursor: "pointer", fontFamily: "Nunito", fontSize: "13px", fontWeight: filterType === v ? 700 : 400,
+            borderColor: filterType === v ? "var(--sage)" : "var(--border)",
+            background: filterType === v ? "var(--sage-light)" : "var(--surface2)",
+            color: filterType === v ? "var(--sage)" : "var(--text2)" }}>
+          {l}
+        </button>
+      ))}
+    </div>
+    {filterType === "category" && (
+      <select value={filterValue} onChange={e => setFilterValue(e.target.value)} style={fieldStyle}>
+        <option value="">All categories</option>
+        {data.categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+      </select>
+    )}
+    {filterType === "tag" && (
+      <select value={filterValue} onChange={e => setFilterValue(e.target.value)} style={fieldStyle}>
+        <option value="">All tags</option>
+        {allTags.map(t => <option key={t} value={t}>#{t}</option>)}
+      </select>
+    )}
+  </div>
+
+  <div className="card" style={{ marginBottom: "16px", background: "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+    <div>
+      <div style={{ fontSize: "13px", color: "var(--text2)" }}>Ready to export</div>
+      <div style={{ fontWeight: 700, fontSize: "22px", color: "var(--text)", fontFamily: "Nunito" }}>{previewCount} transaction{previewCount !== 1 ? "s" : ""}</div>
+      <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>5 sheets: Summary, Transactions, By Category, By Tag, By Account + Monthly Overview</div>
+    </div>
+  </div>
+
+  {error && <div style={{ color: "var(--berry)", fontSize: "13px", marginBottom: "10px", padding: "10px 14px", background: "var(--berry-light)", borderRadius: "var(--radius-sm)" }}>{error}</div>}
+  <button className="btn btn-primary" onClick={doExport} disabled={exporting || previewCount === 0}
+    style={{ width: "100%", justifyContent: "center", padding: "14px", fontSize: "15px", fontWeight: 700, opacity: previewCount === 0 ? 0.5 : 1 }}>
+    {exporting ? "Preparing..." : done ? "Downloaded!" : "Download Excel file"}
+  </button>
+  {previewCount === 0 && <div style={{ fontSize: "12px", color: "var(--text3)", textAlign: "center", marginTop: "8px" }}>No transactions match the current filters</div>}
+</div>
+```
+
+);
+}
+
+// ─── Settings Page ─────────────────────────────────────────────────────────────
+function SettingsPage({ data, setData, onShowTutorial }) {
+const [tab, setTab] = useState(“categories”);
+const [catForm, setCatForm] = useState({ name: “”, color: COLORS[0], icon: “✨” });
+const [accForm, setAccForm] = useState({ name: “”, color: COLORS[0], icon: “🏦” });
+
+const addCat = () => {
+if (!catForm.name.trim()) return;
+setData(d => ({ …d, categories: […d.categories, { id: uid(), …catForm }] }));
+setCatForm({ name: “”, color: COLORS[0], icon: “✨” });
+};
+const deleteCat = (id) => setData(d => ({ …d, categories: d.categories.filter(c => c.id !== id) }));
+
+const addAcc = () => {
+if (!accForm.name.trim()) return;
+setData(d => ({ …d, accounts: […d.accounts, { id: uid(), …accForm }] }));
+setAccForm({ name: “”, color: COLORS[0], icon: “🏦” });
+};
+const deleteAcc = (id) => setData(d => ({ …d, accounts: d.accounts.filter(a => a.id !== id) }));
+
+return (
+<div className="page">
+<div className="page-header">
+<div>
+<div className="page-title">Settings</div>
+<div className="page-subtitle">Make it yours</div>
+</div>
+</div>
+
+```
+  <div className="tabs">
+    {["categories", "accounts", "general", "export", "about"].map(t => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>)}
+  </div>
+
+  {tab === "categories" && (
+    <div>
+      <div className="card" style={{ marginBottom: "16px" }}>
+        <div style={{ fontFamily: "Nunito", fontSize: "15px", marginBottom: "14px" }}>Add category</div>
+        <div className="form-row">
+          <div className="field">
+            <label>Icon (emoji)</label>
+            <input value={catForm.icon} onChange={e => setCatForm(f => ({ ...f, icon: e.target.value }))} maxLength={2} style={{ width: "60px", textAlign: "center", fontSize: "18px", background: "var(--surface2)", color: "var(--text)", border: "1.5px solid var(--border)", borderRadius: "8px", padding: "8px", fontFamily: "Nunito", outline: "none" }} />
+          </div>
+          <div className="field">
+            <label>Name</label>
+            <input value={catForm.name} onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))} placeholder="Category name" />
+          </div>
+        </div>
+        <div className="field">
+          <label>Colour</label>
+          <div className="color-row">
+            {COLORS.map(c => <div key={c} className={`color-swatch ${catForm.color === c ? "selected" : ""}`} style={{ background: c }} onClick={() => setCatForm(f => ({ ...f, color: c }))} />)}
+          </div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={addCat}><Icon name="plus" size={13} /> Add</button>
+      </div>
+      <div className="card">
+        {data.categories.map(c => (
+          <div key={c.id} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ width: "12px", height: "12px", borderRadius: "50%", background: c.color }} />
+            <span style={{ fontSize: "18px" }}>{c.icon}</span>
+            <span style={{ flex: 1, fontSize: "14px" }}>{c.name}</span>
+            <button className="btn-icon" onClick={() => deleteCat(c.id)}><Icon name="trash" size={13} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {tab === "accounts" && (
+    <div>
+      <div className="card" style={{ marginBottom: "16px" }}>
+        <div style={{ fontFamily: "Nunito", fontSize: "15px", marginBottom: "14px" }}>Add account</div>
+        <div className="form-row">
+          <div className="field">
+            <label>Icon (emoji)</label>
+            <input value={accForm.icon} onChange={e => setAccForm(f => ({ ...f, icon: e.target.value }))} maxLength={2} style={{ width: "60px", textAlign: "center", fontSize: "18px", background: "var(--surface2)", color: "var(--text)", border: "1.5px solid var(--border)", borderRadius: "8px", padding: "8px", fontFamily: "Nunito", outline: "none" }} />
+          </div>
+          <div className="field">
+            <label>Name</label>
+            <input value={accForm.name} onChange={e => setAccForm(f => ({ ...f, name: e.target.value }))} placeholder="Account name" />
+          </div>
+        </div>
+        <div className="field">
+          <label>Colour</label>
+          <div className="color-row">
+            {COLORS.map(c => <div key={c} className={`color-swatch ${accForm.color === c ? "selected" : ""}`} style={{ background: c }} onClick={() => setAccForm(f => ({ ...f, color: c }))} />)}
+          </div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={addAcc}><Icon name="plus" size={13} /> Add</button>
+      </div>
+      <div className="card">
+        {data.accounts.map(a => (
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ width: "12px", height: "12px", borderRadius: "50%", background: a.color }} />
+            <span style={{ fontSize: "18px" }}>{a.icon}</span>
+            <span style={{ flex: 1, fontSize: "14px" }}>{a.name}</span>
+            <button className="btn-icon" onClick={() => deleteAcc(a.id)}><Icon name="trash" size={13} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {tab === "export" && (
+    <ExportTab data={data} />
+  )}
+
+  {tab === "general" && (
+    <div className="card">
+      <div className="field">
+        <label>Currency symbol</label>
+        <input value={data.currency} onChange={e => setData(d => ({ ...d, currency: e.target.value }))} style={{ width: '70px', background: 'var(--surface2)', color: 'var(--text)', border: '1.5px solid var(--border)', borderRadius: '8px', padding: '8px 10px', fontFamily: 'Nunito', fontSize: '14px', outline: 'none' }} maxLength={3} />
+      </div>
+      <div className="section-divider" />
+      <div style={{ fontSize: "13px", color: "var(--text3)" }}>
+        <strong style={{ color: "var(--text)" }}>Data storage</strong><br />
+        Your data is saved automatically after every change. You never need to manually save.
+      </div>
+      <div className="section-divider" />
+      <div style={{ fontSize: "13px", color: "var(--text2)", marginBottom: "8px" }}>
+        <strong style={{ color: "var(--text)" }}>Reset app data</strong><br />
+        If the app is behaving oddly, clearing storage and reloading can fix it. This resets back to the sample data.
+      </div>
+      <button className="btn btn-danger" onClick={async () => {
+        if (window.confirm("Reset all data to defaults? This cannot be undone.")) {
+          await clearStorage();
+          window.location.reload();
+        }
+      }}>Clear storage & reset</button>
+      <div className="section-divider" />
+      <div style={{ fontSize: "13px", color: "var(--text2)", marginBottom: "10px" }}>
+        <strong style={{ color: "var(--text)" }}>Tutorial</strong><br />
+        New to bloom or want a refresher? The guided tour covers everything.
+      </div>
+      <button className="btn btn-secondary" onClick={() => setShowTutorial(true)} style={{ marginBottom: "16px" }}>
+        Show tutorial
+      </button>
+      <div className="section-divider" />
+      <div style={{ fontSize: "13px", color: "var(--text2)", marginBottom: "10px" }}>
+        <strong style={{ color: "var(--text)" }}>Feedback</strong><br />
+        Found a bug? Have a suggestion? I'd genuinely love to hear from you.
+      </div>
+      <a href={"mailto:" + getAdminConfig().feedbackEmail + "?subject=BloomBudget feedback"}
+        className="btn btn-secondary"
+        style={{ textDecoration: "none", display: "inline-flex" }}>
+        Send feedback
+      </a>
+    </div>
+  )}
+
+  {tab === "about" && (
+    <div>
+      <div className="card" style={{ marginBottom: "14px", background: "linear-gradient(135deg, #2E1020 0%, #1E1A2E 100%)", border: "1px solid var(--berry-mid)" }}>
+        <div style={{ fontSize: "28px", fontWeight: 700, color: "var(--berry)", fontFamily: "Nunito", marginBottom: "4px" }}>bloom</div>
+        <div style={{ fontSize: "13px", color: "var(--text3)", marginBottom: "16px", fontStyle: "italic" }}>your money, kindly</div>
+        <div style={{ fontSize: "14px", color: "var(--text2)", lineHeight: 1.7 }}>
+          Hi! I'm the person behind bloom. I have ADHD, and like a lot of people with ADHD, I've had a complicated relationship with money — not because I don't care, but because most budgeting tools feel designed for a different kind of brain.
+        </div>
+        <div style={{ fontSize: "14px", color: "var(--text2)", lineHeight: 1.7, marginTop: "10px" }}>
+          I built bloom for myself first. Something warm, simple, and honest — that tracks without judging, and shows you where your money goes without making you feel bad about it. If it helps you too, that genuinely makes me happy.
+        </div>
+        <div style={{ fontSize: "14px", color: "var(--text2)", lineHeight: 1.7, marginTop: "10px" }}>
+          bloom is free and always will be. If it's been useful to you, a small coffee goes a long way toward keeping it running and growing. ♥
+        </div>
+      </div>
+
+      <a
+        href={getAdminConfig().kofiUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ textDecoration: "none", display: "block", marginBottom: "12px" }}
+      >
+        <div style={{
+          background: "linear-gradient(135deg, #FF6B6B, #FF8E53)",
+          borderRadius: "var(--radius)",
+          padding: "16px 20px",
+          display: "flex",
+          alignItems: "center",
+          gap: "14px",
+          cursor: "pointer",
+          boxShadow: "0 4px 20px rgba(255,107,107,0.3)"
+        }}>
+          <div style={{ fontSize: "28px" }}>☕</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "15px", color: "white" }}>Buy me a coffee</div>
+            <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.85)", marginTop: "2px" }}>Support bloom on Ko-fi</div>
+          </div>
+          <div style={{ marginLeft: "auto", color: "rgba(255,255,255,0.7)", fontSize: "18px" }}>→</div>
+        </div>
+      </a>
+
+      <a
+        href={"mailto:" + getAdminConfig().feedbackEmail + "?subject=BloomBudget feedback"}
+        style={{ textDecoration: "none", display: "block", marginBottom: "12px" }}
+      >
+        <div style={{
+          background: "var(--surface)",
+          border: "1.5px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: "16px 20px",
+          display: "flex",
+          alignItems: "center",
+          gap: "14px",
+          cursor: "pointer"
+        }}>
+          <div style={{ fontSize: "24px" }}>✉️</div>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "14px", color: "var(--text)" }}>Share feedback</div>
+            <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>Bugs, ideas, or just to say hi</div>
+          </div>
+          <div style={{ marginLeft: "auto", color: "var(--text3)", fontSize: "18px" }}>→</div>
+        </div>
+      </a>
+
+      <div style={{ textAlign: "center", fontSize: "12px", color: "var(--text3)", marginTop: "20px", lineHeight: 1.6 }}>
+        bloom v1.0 · made with care for messy brains everywhere
+      </div>
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+function App() {
+const [data, setDataRaw] = useState(null);
+const [page, setPage] = useState(“dashboard”);
+const [loaded, setLoaded] = useState(false);
+const [storageError, setStorageError] = useState(false);
+const [showTutorial, setShowTutorial] = useState(false);
+const [showAdmin, setShowAdmin] = useState(false);
+const [adminTapCount, setAdminTapCount] = useState(0);
+const [adminTapTimer, setAdminTapTimer] = useState(null);
+
+useEffect(() => {
+loadData().then(saved => {
+if (saved) {
+setDataRaw(saved);
+} else {
+setDataRaw(INITIAL_STATE);
+setStorageError(false);
+}
+setLoaded(true);
+if (!hasTutorialBeenSeen()) {
+setTimeout(() => setShowTutorial(true), 600);
+}
+}).catch(err => {
+console.error(“Load error:”, err);
+setDataRaw(INITIAL_STATE);
+setStorageError(true);
+setLoaded(true);
+});
+}, []);
+
+const setData = (updater) => {
+setDataRaw(prev => {
+const next = typeof updater === “function” ? updater(prev) : updater;
+saveData(next);
+return next;
+});
+};
+
+if (!loaded) return (
+<div style={{ height: “100vh”, display: “flex”, alignItems: “center”, justifyContent: “center”, fontFamily: “Lora, serif”, color: “#C4697A”, fontSize: “24px”, background: “#FBF6F0” }}>
+Loading your budget…
+</div>
+);
+
+const nav = [
+{ id: “dashboard”, label: “Dashboard”, icon: “home”,     color: “#F08898”, bg: “#4A1828” },
+{ id: “expenses”,  label: “Expenses”,  icon: “wallet”,   color: “#F0A870”, bg: “#40200A” },
+{ id: “budgets”,   label: “Budgets”,   icon: “chart”,    color: “#70D098”, bg: “#0E3020” },
+{ id: “stats”,     label: “Statistics”,icon: “brain”,    color: “#70B8E0”, bg: “#0E2838” },
+{ id: “analysis”,  label: “Analysis”,  icon: “sparkle”,  color: “#E888A8”, bg: “#481020” },
+{ id: “calendar”,  label: “Calendar”,  icon: “calendar”, color: “#E89870”, bg: “#401808” },
+{ id: “notes”,     label: “Notes”,     icon: “note”,     color: “#E8C860”, bg: “#382005” },
+{ id: “settings”,  label: “Settings”,  icon: “settings”, color: “#B09898”, bg: “#302020” },
+];
+
+const pages = { dashboard: Dashboard, expenses: ExpensesPage, budgets: BudgetsPage, stats: StatsPage, analysis: AnalysisPage, calendar: CalendarPage, notes: NotesPage, settings: SettingsPage };
+const extraProps = page === “settings” ? { onShowTutorial: () => setShowTutorial(true) } : {};
+const PageComponent = pages[page] || Dashboard;
+
+return (
+<>
+<style>{styles}</style>
+<div className="app">
+{storageError && (
+<div style={{ position: “fixed”, top: 0, left: 0, right: 0, background: “var(–berry)”, color: “white”, padding: “10px 16px”, fontSize: “13px”, zIndex: 200, display: “flex”, justifyContent: “space-between”, alignItems: “center” }}>
+<span>Storage issue detected — showing default data. Go to Settings → Reset to clear.</span>
+<button onClick={() => setStorageError(false)} style={{ background: “none”, border: “none”, color: “white”, cursor: “pointer”, fontSize: “16px” }}>×</button>
+</div>
+)}
+<nav className="sidebar">
+<div className="sidebar-logo">
+bloom<span>your money, kindly</span>
+</div>
+{nav.map(n => {
+const isActive = page === n.id;
+return (
+<button key={n.id}
+className={`nav-btn ${isActive ? "active" : ""}`}
+onClick={() => setPage(n.id)}
+style={isActive ? { color: n.color, background: n.bg + “88” } : {}}
+>
+<span className=“nav-icon-pill” style={{
+background: n.bg,
+color: n.color,
+opacity: isActive ? 1 : 0.65,
+transform: isActive ? “scale(1.1)” : “scale(1)”,
+boxShadow: isActive ? `0 2px 8px ${n.color}40` : “none”
+}}>
+<Icon name={n.icon} size={15} />
+</span>
+<span style={{ opacity: isActive ? 1 : 0.75 }}>{n.label}</span>
+</button>
+);
+})}
+</nav>
+<main className="main">
+<PageComponent data={data} setData={setData} {…extraProps} />
+<div style={{
+textAlign: “center”, padding: “24px 16px 12px”,
+fontSize: “11px”, color: “var(–text3)”,
+display: “flex”, alignItems: “center”, justifyContent: “center”, gap: “14px”, flexWrap: “wrap”
+}}>
+<span
+onClick={() => {
+const newCount = adminTapCount + 1;
+setAdminTapCount(newCount);
+if (adminTapTimer) clearTimeout(adminTapTimer);
+const t = setTimeout(() => setAdminTapCount(0), 2000);
+setAdminTapTimer(t);
+if (newCount >= 5) { setAdminTapCount(0); setShowAdmin(true); }
+}}
+style={{ cursor: “default”, userSelect: “none” }}
+>bloom · your money, kindly</span>
+<a href={getAdminConfig().kofiUrl} target=”_blank” rel=“noopener noreferrer”
+style={{ color: “var(–berry)”, textDecoration: “none”, fontWeight: 600, fontSize: “11px” }}>
+☕ buy me a coffee
+</a>
+<a href={“mailto:” + getAdminConfig().feedbackEmail + “?subject=BloomBudget feedback”}
+style={{ color: “var(–text3)”, textDecoration: “none” }}>
+feedback
+</a>
+</div>
+</main>
+
+```
+    {showTutorial && <TutorialModal onClose={() => { markTutorialSeen(); setShowTutorial(false); }} />}
+    {showAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
+
+    {/* Mobile bottom tab bar */}
+    <nav className="bottom-nav">
+      {nav.map(n => {
+        const isActive = page === n.id;
+        return (
+          <button key={n.id}
+            className={`bottom-nav-btn ${isActive ? "active" : ""}`}
+            onClick={() => setPage(n.id)}
+          >
+            <span className="bottom-nav-pill" style={{
+              background: n.bg,
+              color: n.color,
+              opacity: isActive ? 1 : 0.5,
+              boxShadow: isActive ? `0 3px 10px ${n.color}50` : "none",
+            }}>
+              <Icon name={n.icon} size={16} />
+            </span>
+            <span className="bottom-nav-label" style={{
+              color: isActive ? n.color : "var(--text3)",
+              opacity: isActive ? 1 : 0.7,
+            }}>
+              {n.label}
+            </span>
+          </button>
+        );
+      })}
+    </nav>
+  </div>
+</>
+```
+
+);
+}
+
+const root = ReactDOM.createRoot(document.getElementById(‘root’));
+root.render(React.createElement(App));
+
+  </script>
+</body>
+</html>
